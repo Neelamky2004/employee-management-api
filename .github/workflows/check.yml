@@ -1,0 +1,39 @@
+name: check
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: employee_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: mvn -B test
+      - run: mvn -B package -DskipTests
+      - name: Run API and call endpoints
+        run: |
+          java -jar target/employee-management-api-1.0.jar > app.log 2>&1 &
+          for i in $(seq 1 30); do curl -s localhost:8080/api/employees >/dev/null && break; sleep 2; done
+          set -x
+          B='{"name":"Rahul Sharma","email":"rahul@test.com","department":"IT","designation":"Software Engineer","joiningDate":"2025-07-01"}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "$B" localhost:8080/api/employees)" = 201
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d "$B" localhost:8080/api/employees)" = 409
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"name":"","email":"bad"}' localhost:8080/api/employees)" = 400
+          curl -s localhost:8080/api/employees; echo
+          curl -s "localhost:8080/api/employees?department=it"; echo
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' -d '{"name":"Rahul Sharma","email":"rahul@test.com","department":"HR","designation":"HR Executive","joiningDate":"2025-07-01"}' localhost:8080/api/employees/1)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/employees/99)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE localhost:8080/api/employees/1)" = 204
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/api/employees/1)" = 404
+      - if: always()
+        run: tail -40 app.log || true
